@@ -9,3 +9,6 @@ __pycache__/
 # os / editor
 .DS_Store
 .vscode/
+
+# personal tracking notes - not part of the public deliverable
+PROJECT_STATE.md
