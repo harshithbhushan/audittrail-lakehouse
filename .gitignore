@@ -1,0 +1,11 @@
+# generated data - synthetic PII-shaped fields (build artifacts)
+data/
+
+# python
+venv/
+__pycache__/
+*.pyc
+
+# os / editor
+.DS_Store
+.vscode/
