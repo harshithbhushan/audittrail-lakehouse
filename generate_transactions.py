@@ -2,7 +2,7 @@ import csv
 import json
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from faker import Faker
@@ -16,6 +16,13 @@ NUM_ACCOUNTS = 500  # matches Day 6 account_snapshots population
 CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD"]
 TRANSACTION_TYPES = ["purchase", "refund", "transfer", "withdrawal", "deposit"]
 OUT_DIR = Path("data")
+
+# fixed UTC anchor, not datetime.now() -- wall-clock time isn't covered by
+# the random seed, so timestamps weren't actually reproducible before this.
+# also makes every timestamp explicitly tz-aware, which JSON Schema's
+# date-time format requires and which a real audit trail shouldn't be
+# ambiguous about anyway.
+GENERATION_ANCHOR = datetime(2026, 8, 4, 12, 0, 0, tzinfo=timezone.utc)
 
 # one identity per account, looked up per transaction -- an account
 # belongs to one customer, it shouldn't reroll on every row
@@ -39,7 +46,7 @@ def random_amount() -> float:
 def random_event_timestamp() -> datetime:
     days_back = random.randint(0, 90)
     seconds_back = random.randint(0, 86_400)
-    return datetime.now() - timedelta(days=days_back, seconds=seconds_back)
+    return GENERATION_ANCHOR - timedelta(days=days_back, seconds=seconds_back)
 
 
 def generate_row() -> dict:

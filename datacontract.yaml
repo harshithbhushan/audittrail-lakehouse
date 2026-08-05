@@ -1,0 +1,83 @@
+apiVersion: v3.1.0
+kind: DataContract
+id: urn:datacontract:audittrail:transactions
+name: transactions
+version: 1.0.0
+status: active
+description:
+  purpose: Raw synthetic transaction feed ingested into the AuditTrail lakehouse Bronze layer.
+
+servers:
+  - server: local_csv
+    type: local
+    path: ./data/transactions.csv
+    format: csv
+  - server: local_json
+    type: local
+    path: ./data/transactions.json
+    format: json
+    delimiter: array  # file is a single JSON array of records, not newline-delimited
+
+schema:
+  - name: transactions
+    physicalType: table
+    properties:
+      - name: transaction_id
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+        unique: true
+        primaryKey: true
+        logicalTypeOptions:
+          format: uuid
+
+      - name: account_id
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+
+      - name: customer_name
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+
+      - name: ssn_last4
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+        logicalTypeOptions:
+          minLength: 4
+          maxLength: 4
+          pattern: "^[0-9]{4}$"
+
+      - name: amount
+        logicalType: number
+        physicalType: DOUBLE
+        required: true
+        logicalTypeOptions:
+          exclusiveMinimum: 0
+          maximum: 1000000
+
+      - name: currency
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+        logicalTypeOptions:
+          minLength: 3
+          maxLength: 3
+          pattern: "^[A-Z]{3}$"
+
+      - name: transaction_type
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+
+      - name: event_timestamp
+        logicalType: timestamp
+        physicalType: VARCHAR
+        required: true
+
+      - name: ingestion_timestamp
+        logicalType: timestamp
+        physicalType: VARCHAR
+        required: true
