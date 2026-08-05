@@ -1,4 +1,6 @@
-## Session 1 — 2026-08-04 — Environment Setup + Synthetic Data Generation
+# LOG
+
+## Session 1 — 2026-08-04 — Environment Setup + Synthetic Data Generation (Roadmap Day 1)
 
 **Goal**
 Stand up the Databricks Free Edition workspace, build a reproducible synthetic transaction generator (10,000 rows), and get the repo scaffolded and live on GitHub.
@@ -26,8 +28,7 @@ Go. All three Day 1 check criteria met: working serverless workspace confirmed, 
 **⚠️ Technical Challenges & Troubleshooting**
 None today — Databricks compute attach, the generator run, and the repo push all succeeded on the first attempt. The one thing worth flagging isn't a failure but a near-miss caught before it shipped: an initial uniform amount distribution would have silently broken Day 12's SAR threshold logic. Caught by testing the actual output distribution before handing the script over, rather than trusting the range constraint alone.
 
-
-## Session 2 — 2026-08-04 — Data Contract (Schema + Quality Enforcement)
+## Session 2 — 2026-08-04 — Data Contract (Schema + Quality Enforcement) (Roadmap Day 2)
 
 **Goal**
 Write and verify a data contract for the transactions schema: pass on clean data, fail with a specific field-level error on corrupted data.
@@ -59,8 +60,7 @@ Real ones today, unlike Day 1.
 2. The local JSON connector's `delimiter: array` requirement isn't in the quickstart docs — found by testing three structural hypotheses (bare array, wrapped object, JSON Lines) against the actual error messages before landing on the right config key.
 3. Found and fixed a real correctness bug carried over from Day 1: `datetime.now()` wasn't covered by the random seed, so timestamps were never actually reproducible across runs, despite yesterday's log claiming otherwise. Root-caused and corrected today.
 
-
-## Session 3 — 2026-08-05 — Bronze Layer + PII Masking
+## Session 3 — 2026-08-05 — Bronze Layer + PII Masking (Roadmap Day 3)
 
 **Goal**
 Ingest the Day 1 CSV into a governed Bronze Delta table with PII masked before write, and confirm Delta's version history exists.
@@ -86,8 +86,7 @@ Go. `workspace.bronze.transactions` live, 10,000/10,000 rows written, masking ve
 **⚠️ Technical Challenges & Troubleshooting**
 Couldn't fully test the Delta write + `DESCRIBE HISTORY` mechanics ahead of time — the environment used to verify code before handing it over couldn't reach Maven Central to resolve Delta's JVM dependency. Worked around it by isolating what actually had bug risk (the masking transformation logic) and testing that with plain Spark, while treating the Delta write itself as low-risk native platform behavior. Confirmed correct once run against the real workspace — but worth naming honestly as a case where full pre-verification wasn't possible, unlike Days 1 and 2.
 
-
-## Session 4 — 2026-08-05 — Silver Layer + Dead Letter Routing
+## Session 4 — 2026-08-05 — Silver Layer + Dead Letter Routing (Roadmap Day 4)
 
 **Goal**
 Add a validation layer on top of Bronze that separates valid transactions from invalid ones, with a documented reason for every rejection, instead of silently dropping or failing on bad records.
@@ -109,4 +108,4 @@ Go. `workspace.silver.transactions` and `workspace.silver.transactions_dead_lett
 - **Backslash line continuation avoided in favor of parenthesized multi-line chains** — more robust to copy-paste across tools, since a backslash-continuation breaks silently on any trailing whitespace after it.
 
 **⚠️ Technical Challenges & Troubleshooting**
-Backslash line-continuation syntax broke on paste into the Databricks notebook cell — invisible trailing whitespace after `\` is a real, silent syntax error. Root-caused and fixed with parenthesized multi-line expressions; reverified the rewrite behaves identically before handing it back. Also worth stating plainly: today's 0 dead-letter records is the *expected* result of clean input, not an untested code path.
+Backslash line-continuation syntax broke on paste into the Databricks notebook cell — invisible trailing whitespace after `\` is a real, silent syntax error. Root-caused and fixed with parenthesized multi-line expressions; reverified the rewrite behaves identically before handing it back. Also worth stating plainly: today's 0 dead-letter records is the *expected* result of clean input, not an untested code path — the actual stress test is Day 5.
