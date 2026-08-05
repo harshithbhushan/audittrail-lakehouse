@@ -58,3 +58,55 @@ Real ones today, unlike Day 1.
 1. Windows blocked `pydantic-core`'s compiled DLL on first install (`Application Control policy has blocked this file` — Smart App Control flagging an unsigned native extension). Resolved on a clean retry; exact cause unconfirmed (likely a reputation-check timing issue on Microsoft's side), noted as a watch-item if `duckdb` or `pyarrow` hit the same wall later.
 2. The local JSON connector's `delimiter: array` requirement isn't in the quickstart docs — found by testing three structural hypotheses (bare array, wrapped object, JSON Lines) against the actual error messages before landing on the right config key.
 3. Found and fixed a real correctness bug carried over from Day 1: `datetime.now()` wasn't covered by the random seed, so timestamps were never actually reproducible across runs, despite yesterday's log claiming otherwise. Root-caused and corrected today.
+
+
+## Session 3 — 2026-08-05 — Bronze Layer + PII Masking
+
+**Goal**
+Ingest the Day 1 CSV into a governed Bronze Delta table with PII masked before write, and confirm Delta's version history exists.
+
+**Outcome**
+Go. `workspace.bronze.transactions` live, 10,000/10,000 rows written, masking verified deterministic across two independent environments, first `DESCRIBE HISTORY` entry confirmed (version 0, `numOutputRows: 10000`).
+
+**Actions**
+- Set up `workspace.landing.raw_files` as a Volume separate from `workspace.bronze` — a distinct "arrived, unprocessed" zone from the governed layer. Uploaded `transactions.csv` via the workspace UI (Free Edition restricts outbound internet access, so UI upload is required, not a code-based fetch).
+- Verified the masking transformation logic locally with plain PySpark before running it against Databricks (Delta's JVM jar wasn't reachable from the sandbox's network policy, so the Delta write itself couldn't be tested there — the masking logic, the part with actual bug risk, could and was): confirmed explicit-schema read matches contract types, zero data loss, zero nulls introduced, and hash determinism (same `account_id` → same hashed `customer_name` across every transaction for that account).
+- Ran the real notebook against Databricks: explicit schema on read, `customer_name` → `sha2(..., 256)`, `ssn_last4` → partial mask (`XX` + last two digits), `account_id` untouched, written to `workspace.bronze.transactions` as Delta.
+- Cross-checked two accounts' masked `customer_name` hashes between the local test run and the live Databricks table — byte-for-byte identical, confirming the masking is genuinely deterministic across two separate environments, not just "ran once and looked right."
+- Ran `DESCRIBE HISTORY`: version 0, `CREATE OR REPLACE TABLE AS SELECT`, `numOutputRows: 10000` (exact match to source), `isBlindAppend: false`.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **Landing zone (`workspace.landing.raw_files`) kept separate from `workspace.bronze`** — "arrived" and "governed" are different states; worth being able to point at two distinct places, not one folder doing both jobs.
+- **`sha2()` as a native Spark SQL function, not a Python UDF wrapped around `hashlib`** — avoids crossing the JVM↔Python serialization boundary row by row; the function runs natively inside the same query plan as everything else.
+- **Two different masking techniques for two different needs** — `customer_name` gets a one-way hash (identity never needs recovering, just consistent matching); `ssn_last4` gets a partial mask (`XX` + last two), keeping enough utility for fraud/ops pattern-matching without exposing the real value. One technique doesn't fit both jobs.
+- **`account_id` left unmasked** — internal surrogate key, not PII on its own, and every join in this project depends on it.
+- **Explicit schema on read, not `inferSchema`** — matches Day 2's contract types exactly instead of letting Spark guess from a sample.
+- **`DESCRIBE HISTORY`'s `numOutputRows` used as an independent data-loss check**, not just confirmation the write didn't error.
+
+**⚠️ Technical Challenges & Troubleshooting**
+Couldn't fully test the Delta write + `DESCRIBE HISTORY` mechanics ahead of time — the environment used to verify code before handing it over couldn't reach Maven Central to resolve Delta's JVM dependency. Worked around it by isolating what actually had bug risk (the masking transformation logic) and testing that with plain Spark, while treating the Delta write itself as low-risk native platform behavior. Confirmed correct once run against the real workspace — but worth naming honestly as a case where full pre-verification wasn't possible, unlike Days 1 and 2.
+
+
+## Session 4 — 2026-08-05 — Silver Layer + Dead Letter Routing
+
+**Goal**
+Add a validation layer on top of Bronze that separates valid transactions from invalid ones, with a documented reason for every rejection, instead of silently dropping or failing on bad records.
+
+**Outcome**
+Go. `workspace.silver.transactions` and `workspace.silver.transactions_dead_letter` both exist and are independently queryable. Today's result is 10,000 valid / 0 dead letter — the correct outcome given clean baseline data, not an untested code path; the routing logic itself was separately verified against deliberately injected bad records before running against the real table.
+
+**Actions**
+- Created the `workspace.silver` schema.
+- Verified the validate/split logic locally before running it for real: injected three deliberately bad rows into a local test copy (null amount, negative amount + lowercase currency simultaneously, null transaction_id) and confirmed correct routing — including that a record failing two rules at once gets tagged with both reasons (`"amount_invalid; currency_invalid"`), not just the first one matched.
+- Ran the real notebook: read `workspace.bronze.transactions`, built a per-rule reason array (amount not null/>0, currency matches `^[A-Z]{3}$`, transaction_id not null), concatenated multi-rule failures, split on reason count, wrote both as Delta tables.
+- Hit and fixed a real copy-paste bug: a backslash line-continuation broke when pasted into the Databricks notebook cell (trailing whitespace after `\` is a silent syntax error). Rewrote using parenthesized multi-line chaining instead — not sensitive to trailing whitespace — and reverified identical behavior before handing the fix back.
+- Confirmed final counts: total 10,000, valid 10,000, dead_letter 0. Independently confirmed both tables queryable via SQL.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **Silver validation is a different layer than Day 2's data contract, not a repeat of it.** The contract is a boundary check on the raw file — one pass/fail signal, before the data is trusted at all. Silver validation runs inside the pipeline and physically *routes* each record: valid data flows forward, invalid data is preserved with a documented reason, never silently dropped.
+- **`rejection_reason` concatenates every rule a record fails**, not just the first match — a record wrong in two ways keeps both reasons on record for triage, rather than losing information to an arbitrary precedence order.
+- **`silver.transactions` carries no `rejection_reason` column at all** (every row there passed by definition); only the dead-letter table carries it. Deliberately different schemas rather than one shared schema with a nullable/empty column on the valid side.
+- **Backslash line continuation avoided in favor of parenthesized multi-line chains** — more robust to copy-paste across tools, since a backslash-continuation breaks silently on any trailing whitespace after it.
+
+**⚠️ Technical Challenges & Troubleshooting**
+Backslash line-continuation syntax broke on paste into the Databricks notebook cell — invisible trailing whitespace after `\` is a real, silent syntax error. Root-caused and fixed with parenthesized multi-line expressions; reverified the rewrite behaves identically before handing it back. Also worth stating plainly: today's 0 dead-letter records is the *expected* result of clean input, not an untested code path.
