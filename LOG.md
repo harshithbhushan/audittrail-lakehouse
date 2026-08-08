@@ -28,6 +28,7 @@ Go. All three Day 1 check criteria met: working serverless workspace confirmed, 
 **⚠️ Technical Challenges & Troubleshooting**
 None today — Databricks compute attach, the generator run, and the repo push all succeeded on the first attempt. The one thing worth flagging isn't a failure but a near-miss caught before it shipped: an initial uniform amount distribution would have silently broken Day 12's SAR threshold logic. Caught by testing the actual output distribution before handing the script over, rather than trusting the range constraint alone.
 
+
 ## Session 2 — 2026-08-04 — Data Contract (Schema + Quality Enforcement) (Roadmap Day 2)
 
 **Goal**
@@ -60,6 +61,7 @@ Real ones today, unlike Day 1.
 2. The local JSON connector's `delimiter: array` requirement isn't in the quickstart docs — found by testing three structural hypotheses (bare array, wrapped object, JSON Lines) against the actual error messages before landing on the right config key.
 3. Found and fixed a real correctness bug carried over from Day 1: `datetime.now()` wasn't covered by the random seed, so timestamps were never actually reproducible across runs, despite yesterday's log claiming otherwise. Root-caused and corrected today.
 
+
 ## Session 3 — 2026-08-05 — Bronze Layer + PII Masking (Roadmap Day 3)
 
 **Goal**
@@ -86,6 +88,7 @@ Go. `workspace.bronze.transactions` live, 10,000/10,000 rows written, masking ve
 **⚠️ Technical Challenges & Troubleshooting**
 Couldn't fully test the Delta write + `DESCRIBE HISTORY` mechanics ahead of time — the environment used to verify code before handing it over couldn't reach Maven Central to resolve Delta's JVM dependency. Worked around it by isolating what actually had bug risk (the masking transformation logic) and testing that with plain Spark, while treating the Delta write itself as low-risk native platform behavior. Confirmed correct once run against the real workspace — but worth naming honestly as a case where full pre-verification wasn't possible, unlike Days 1 and 2.
 
+
 ## Session 4 — 2026-08-05 — Silver Layer + Dead Letter Routing (Roadmap Day 4)
 
 **Goal**
@@ -109,3 +112,31 @@ Go. `workspace.silver.transactions` and `workspace.silver.transactions_dead_lett
 
 **⚠️ Technical Challenges & Troubleshooting**
 Backslash line-continuation syntax broke on paste into the Databricks notebook cell — invisible trailing whitespace after `\` is a real, silent syntax error. Root-caused and fixed with parenthesized multi-line expressions; reverified the rewrite behaves identically before handing it back. Also worth stating plainly: today's 0 dead-letter records is the *expected* result of clean input, not an untested code path — the actual stress test is Day 5.
+
+
+## Session 5 — 2026-08-08 — Chaos 1: Poison Pill (Roadmap Day 5)
+
+**Goal**
+Prove the dead-letter routing built in Session 4 actually catches bad data under a real chaos scenario — and along the way, fix a more fundamental gap discovered in the process: the pipeline had no way to distinguish an already-ingested batch from a new one.
+
+**Outcome**
+Go. Bronze correctly accumulated to 11,000 rows across two runs (append, not overwrite or duplicate). Silver's dead-letter routing caught all 150 poisoned records in the new batch (15.0%, matching the injected poison rate exactly) with correct rejection reasons, while the original 10,000 clean records stayed completely untouched.
+
+**Actions**
+- Reasoned through, before writing any code, what `.mode("overwrite")` on Bronze/Silver would do to a second batch, and separately what a naive wildcard-read "fix" would do — correctly concluded overwrite alone loses the prior batch, and overwrite+wildcard together would re-ingest already-processed files, landing at 21,000 rows instead of 11,000.
+- Correctly reasoned that Silver should stay on `overwrite`, not follow Bronze to `append` — Silver's source is a table read (a snapshot of current state), not a file glob, so there's no "already seen this file" ambiguity. Every Silver run is meant to be a full, correct recompute of the current Bronze state, not an incremental accumulation.
+- Fixed Bronze: added a `batch_file` notebook widget, pointed the read at that specific file, switched the write to `append`.
+- Built a poisoned batch generator (1,000 new transactions, 15% with null or negative amount) reusing the exact same account identity mapping as batch 1, then reseeding separately so the new batch doesn't just replay batch 1's row-level pattern. Verified zero identity mismatches across the 441 accounts shared between batches.
+- Verified the full two-batch append + Silver recompute flow locally (11,000 total, original 10,000 still all valid, 850/150 split on the new batch, 15.0% rejection rate) before running it for real.
+- Ran it for real: Bronze landed at exactly 11,000 (confirmed via SQL `COUNT`). Silver's cumulative print matched exactly: 10,850 valid / 150 dead letter.
+- Hit two real widget-related issues getting the batch-specific summary logging correct (see Technical Challenges) before it reported the right numbers.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **Batch ingestion needs an explicit signal for "which file is this run," not a folder glob.** A wildcard read can't distinguish already-processed files from new ones and will silently reprocess/duplicate. Solved with a notebook widget (`batch_file`) — Databricks' run-time parameter mechanism. The production-scale answer to this same problem is Auto Loader (`cloudFiles`), which tracks already-processed files via checkpointing automatically; not adopted here since it's more machinery than this project's scope needs, but worth naming if asked how this scales.
+- **Silver correctly stays on `overwrite`.** Its source is a table read, not a file glob — no incremental-ingestion ambiguity exists there. Every run is a full, correct recompute of "the current split of everything in Bronze, right now."
+- **Batch-specific summary logging via a left-semi join** against the batch's own `transaction_id`s — Silver's output tables aren't partitioned by batch, so isolating "this run's contribution" from the cumulative totals needs an explicit filter, not just a fresh read.
+- **Poisoned batch generator reuses the exact same account identity construction** (same seed, same order) as the original generator, then explicitly reseeds before generating batch-specific values — keeps masked identities consistent across batches while avoiding an accidental replay of batch 1's row-level pattern.
+
+**⚠️ Technical Challenges & Troubleshooting**
+1. `dbutils.widgets.text(name, default)` only sets a default the *first* time a widget is created — rerunning the same line with a new default value silently does nothing once the widget already exists. First attempt to fix the batch summary by editing the widget's default value in code didn't work, for exactly this reason. Root-caused and fixed by changing the value directly in the widget UI (the reliable fix), with `dbutils.widgets.remove()` + a later rerun as the code-only alternative.
+2. Widgets are scoped **per notebook**, not shared globally — setting `batch_file` correctly in Bronze had zero effect on Silver's separate widget of the same name, even though Bronze's own run was already correct. Diagnosed by noticing the mismatched filename embedded directly in the log output, not by guessing.

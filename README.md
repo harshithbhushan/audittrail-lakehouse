@@ -1,3 +1,7 @@
 # AuditTrail
 
 AuditTrail is a production-style financial data lakehouse built on Databricks Free Edition, demonstrating schema contract enforcement, PII masking at ingestion, and SCD Type 2 account history for point-in-time auditability. All data is fully synthetic, generated with Faker to model realistic transaction volume and structure without using any real financial or personal information. This is an active 16-day build — see `LOG.md` for daily progress and design decisions as they're made.
+
+## Chaos Scenarios
+
+**Chaos 1 — Poison Pill.** Before this could be tested properly, a more fundamental gap surfaced: the Bronze notebook had no way to distinguish an already-ingested file from a new one, so a naive rerun would have either silently dropped the previous batch (`overwrite` mode) or duplicated it (a wildcard read reprocessing files it had already seen). Fixed by parameterizing the read to a specific batch file per run and switching Bronze to `append` mode — it now grows correctly across batches instead of resetting or duplicating. With that fixed, the actual chaos test: a 1,000-row batch with 15% of amounts deliberately set to null or negative. Silver's dead-letter routing caught every one of them — 850 rows written to `silver.transactions`, 150 routed to `silver.transactions_dead_letter`, all correctly tagged `amount_invalid`, a 15.0% rejection rate that matches the injected poison rate exactly. Nothing was silently dropped; every rejected row is queryable, with a documented reason, in its own table. 
