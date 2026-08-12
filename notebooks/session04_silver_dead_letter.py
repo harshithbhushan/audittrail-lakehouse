@@ -1,21 +1,26 @@
--- Databricks notebook source
-CREATE SCHEMA IF NOT EXISTS workspace.silver; 
+# Databricks notebook source
+# MAGIC %sql
+# MAGIC CREATE SCHEMA IF NOT EXISTS workspace.silver;
 
--- COMMAND ----------
+# COMMAND ----------
 
---  %python
---  from pyspark.sql.functions import col, when, lit, array, array_join, filter as sfilter, size
--- 
-# Parameterize Silver run to track batch metrics
-dbutils.widgets.text("batch_file", "transactions_batch2_poisoned.csv")
+from typing import TYPE_CHECKING
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when, lit, array, array_join, filter as sfilter, size
+
+# Type hint for local IDEs/linters (VS Code); Databricks injects 'spark' at runtime
+if TYPE_CHECKING:
+    spark: SparkSession = None  # type: ignore
+
+# 1. Parameterize Silver run to track batch metrics (Default: transactions.csv)
+dbutils.widgets.text("batch_file", "transactions.csv")
 batch_file = dbutils.widgets.get("batch_file")
 
+# 2. Load Bronze dataset
 bronze = spark.table("workspace.bronze.transactions")
 
-# one slot per rule: null if it passed, a reason string if it failed.
-# combined instead of stopping at the first failure so a row that's
-# wrong in two ways keeps both reasons on record
-
+# 3. Quality Rule Evaluation: One slot per rule (null if passed, reason string if failed).
+# Combining reasons preserves full triage context when multiple validation rules fail.
 reasons = array(
     when(col("amount").isNull() | (col("amount") <= 0), lit("amount_invalid")),
     when(~col("currency").rlike("^[A-Z]{3}$"), lit("currency_invalid")),
@@ -29,18 +34,21 @@ tagged = (
     .withColumn("_reason_count", size(reason_list))
 )
 
+# 4. Separate clean records from dead letter records
 valid = tagged.filter(col("_reason_count") == 0).drop("rejection_reason", "_reason_count")
 dead_letter = tagged.filter(col("_reason_count") > 0).drop("_reason_count")
 
+# 5. Overwrite Silver Delta tables with the current full validated state
 valid.write.format("delta").mode("overwrite").saveAsTable("workspace.silver.transactions")
 dead_letter.write.format("delta").mode("overwrite").saveAsTable("workspace.silver.transactions_dead_letter")
 
+# 6. Cumulative totals output
 total = bronze.count()
 n_valid = valid.count()
 n_dead = dead_letter.count()
-print(f"total: {total} | valid: {n_valid} | dead_letter: {n_dead}")
+print(f"CUMULATIVE METRICS -- total: {total} | valid: {n_valid} | dead_letter: {n_dead}")
 
-# Batch-Specific Summary (Isolates metrics for the current batch file only)
+# 7. Batch-Specific Summary (Isolates metrics for the target input file only)
 batch_ids = spark.read.option("header", True).csv(
     f"/Volumes/workspace/landing/raw_files/{batch_file}"
 ).select("transaction_id")
@@ -57,10 +65,12 @@ print("\nREJECTION REASONS FOR THIS BATCH:")
 dead_letter.join(batch_ids, "transaction_id", "left_semi") \
     .groupBy("rejection_reason").count().show(truncate=False)
 
--- COMMAND ----------
+# COMMAND ----------
 
-SELECT COUNT(*) FROM workspace.silver.transactions;
+# MAGIC %sql
+# MAGIC SELECT COUNT(*) FROM workspace.silver.transactions;
 
--- COMMAND ----------
+# COMMAND ----------
 
-SELECT COUNT(*) FROM workspace.silver.transactions_dead_letter;
+# MAGIC %sql
+# MAGIC SELECT COUNT(*) FROM workspace.silver.transactions_dead_letter;

@@ -140,3 +140,33 @@ Go. Bronze correctly accumulated to 11,000 rows across two runs (append, not ove
 **⚠️ Technical Challenges & Troubleshooting**
 1. `dbutils.widgets.text(name, default)` only sets a default the *first* time a widget is created — rerunning the same line with a new default value silently does nothing once the widget already exists. First attempt to fix the batch summary by editing the widget's default value in code didn't work, for exactly this reason. Root-caused and fixed by changing the value directly in the widget UI (the reliable fix), with `dbutils.widgets.remove()` + a later rerun as the code-only alternative.
 2. Widgets are scoped **per notebook**, not shared globally — setting `batch_file` correctly in Bronze had zero effect on Silver's separate widget of the same name, even though Bronze's own run was already correct. Diagnosed by noticing the mismatched filename embedded directly in the log output, not by guessing.
+
+
+## Session 6 — 2026-08-11 — SCD Type 2 via Delta MERGE (Roadmap Day 6)
+
+**Goal**
+Implement SCD Type 2 for account-level attributes (status, credit limit) via Delta `MERGE INTO`, enabling the point-in-time auditability that Type 1 and Type 3 can't provide.
+
+**Outcome**
+Go. `workspace.gold.account_history` built via a two-phase load (initial write, then `MERGE` for the update batch). 600 total rows after the update — 500 current, 100 historical — exactly matching the predicted split, verified in aggregate across all 100 changed accounts, not just one example. `VERSION AS OF 0` independently confirms the roadmap's time-travel check (returns 500, the pre-MERGE state, untouched).
+
+**Actions**
+- Worked through, before any code, why Type 1 fails for this table specifically: a concrete auditor scenario (a $9,000 transaction against a July credit limit later overwritten) showed Type 1 doesn't just lose history abstractly — it lets an already-happened transaction retroactively look compliant or non-compliant depending on whatever value happens to be current today, with no error or warning that anything's wrong.
+- Also reasoned through why Type 3 fails here too: it only survives one change per attribute (current + previous columns), and this project already has multiple batches arriving over time — a second credit review isn't hypothetical. Type 3 would silently lose the same information Type 1 does, just one hop later.
+- Built `generate_account_snapshots.py`: two flat files (initial state, updated state) for the same 500-account population, exactly 20% (100 accounts) genuinely changed — one attribute per account, credit limit drawn from fixed tiers rather than a continuous range, for realism and easy diffing during verification.
+- Deliberately kept `valid_from`/`valid_to`/`is_current` out of the raw files — those are pipeline-managed SCD columns, not source data; mixing them in would blur that distinction.
+- Loaded the initial batch as a plain write (no `MERGE` needed — table doesn't exist yet on the first load).
+- Implemented the update batch via the double-staged-row `MERGE` pattern: every changed account duplicated into a real-`merge_key` row (closes the old current row via `WHEN MATCHED`) and a null-`merge_key` row (forces an `INSERT` of the new current row via `WHEN NOT MATCHED`, since `NULL` never matches anything). Verified the staged dataframe construction and the expected final state locally — this environment can't execute real Delta `MERGE`, so this is where actual bug risk lived and where verification focused — before running the real thing.
+- Ran it for real: total 600, current 500, historical 100 — exact match. `ACC00002` traced correctly: closed row (`active`/2500, `valid_to = 2026-08-11`) and new current row (`frozen`/2500, `valid_from = 2026-08-11`), closed-open boundary, no gap or overlap.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **Type 2, not Type 1 or Type 3.** Type 1 lets an already-happened transaction retroactively look compliant based on today's value, silently. Type 3 only survives one change per attribute, and this project already proves multiple changes happen over time.
+- **Raw snapshot files carry only `account_id`/`account_status`/`credit_limit`/`effective_date`** — `valid_from`/`valid_to`/`is_current` are pipeline-assigned metadata, not source data.
+- **Credit limits drawn from fixed tiers, not a continuous range** — matches how real credit policies actually assign limits, and makes "did this actually change" trivially checkable.
+- **`valid_to` uses a sentinel (`9999-12-31`), not `NULL`, for current rows** — avoids `NULL`-comparison footguns in range queries; "what was true on date X" stays a uniform query whether the row is current or historical.
+- **Closed-open interval convention** (`valid_from` inclusive, `valid_to` exclusive) — the closed row's `valid_to` and the new row's `valid_from` share the same date with no gap or overlap, confirmed directly on `ACC00002`.
+- **Double-staged-row `MERGE` pattern** — a single `MERGE` clause can only take one branch (`UPDATE` or `INSERT`) per matched pair; duplicating each changed row lets one statement correctly close an old row and insert a new one for the same logical account in a single pass.
+- **`whenMatchedUpdate` scoped to `is_current = true`** — without it, a later `MERGE` run could match against an already-historical row for the same account and update the wrong one.
+
+**⚠️ Technical Challenges & Troubleshooting**
+Same limitation as Session 3: couldn't execute a real Delta `MERGE` in the verification environment (Maven Central unreachable). Worked around it by verifying everything that feeds into the `MERGE` — the staged dataframe construction and change-detection logic — plus computing the exact expected final row counts by hand, to check the real Databricks run against rather than trusting it blind. Minor: left a broken draft line in a local test script (a DataFrame passed where a Column was expected); caught immediately by the resulting stack trace, never made it into the handed-over notebook code.
