@@ -1,6 +1,15 @@
 # AuditTrail
 
+[![Data Quality](https://github.com/harshithbhushan/audittrail-lakehouse/actions/workflows/data_quality.yml/badge.svg)](https://github.com/harshithbhushan/audittrail-lakehouse/actions/workflows/data_quality.yml)
+
 AuditTrail is a production-style financial data lakehouse built on Databricks Free Edition, demonstrating schema contract enforcement, PII masking at ingestion, and SCD Type 2 account history for point-in-time auditability. All data is fully synthetic, generated with Faker to model realistic transaction volume and structure without using any real financial or personal information. This is an active 16-day build — see `LOG.md` for daily progress and design decisions as they're made.
+
+## Continuous Integration
+
+Every push to `main` regenerates a fresh, deterministic sample of transaction data and runs it through two independent checks: the Day 2 data contract and the Day 9 Great Expectations suite. Either failing fails the build. Verified both directions — a deliberately broken schema correctly turns the build red on the contract-test step specifically, and reverting it turns the build green across all three steps:
+
+![CI run failing on a broken data contract](images/session10_ci_red.png)
+![CI run passing after the contract is fixed](images/session10_ci_green.png)
 
 ## Chaos Scenarios
 

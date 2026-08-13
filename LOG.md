@@ -260,3 +260,31 @@ Go. Suite verified against the real Databricks table: clean run returns `success
 2. `PERSIST TABLE is not supported on serverless compute` — a genuine, documented GX+Databricks-Serverless incompatibility. Fixed with `persist=False`, confirmed via GX's own official support forum rather than guessed at.
 3. `DataContextError: ... already exists` — a persistent `FileDataContext` doesn't allow plain `.add()` twice. Fixed by rewriting to `add_or_update` throughout, verified idempotent across repeated runs before handoff.
 4. `OSError: [Errno 5] Input/output error` when zipping Data Docs directly onto the Volume — a documented Databricks limitation, not something specific to this setup: Unity Catalog Volumes don't support direct-append or non-sequential (random) writes, and zip creation needs to seek backward to update its central directory after each entry. Fixed per Databricks' own official guidance: write the archive to local disk (`/tmp`) first, then copy the finished file onto the Volume as a single sequential write.
+
+
+## Session 10 — 2026-08-13 — CI/CD (Roadmap Day 10)
+
+**Goal**
+Automate validation via GitHub Actions: on every push to `main`, regenerate sample data, run the data contract test and the Great Expectations suite, failing the build if either fails — and prove it with a genuine broken-schema-to-red, fixed-to-green cycle, not just a working pipeline that's never actually been shown to fail correctly.
+
+**Outcome**
+Go. Workflow live, badge green. A deliberately broken currency pattern correctly produced exit code 1 specifically on the `Run data contract test` step (10,000/10,000 rows correctly flagged), and reverting it produced a clean green run across all three steps (generation, contract, GX suite).
+
+**Actions**
+- Adapted the CI validation approach for the fact that GitHub Actions runners have no Databricks/Spark access — CI regenerates a fresh, deterministic sample via `generate_transactions.py` and validates that, rather than the live Silver table. A legitimate, common pattern (validating against fixture data because production isn't reachable from ephemeral runners), not a shortcut.
+- Built a CI-specific Great Expectations script reusing the exact expectations from Session 9, simplified: ephemeral GX context and plain `pandas`, since none of Session 9's Databricks-specific complexity (Spark, `persist=False`, `FileDataContext` persistence, `add_or_update`) applies to a runner that starts fresh every single run.
+- Verified the full CI sequence locally before it touched GitHub: generate → contract test → GX script, on both clean and deliberately broken data, confirming correct exit codes at each step — caught and corrected my own mistake in the process (piping `datacontract test`'s output through `tail` was swallowing its real exit code; re-verified without the pipe).
+- Real bug surfaced independent of anything built this session: generator scripts got reorganized into a `scripts/` folder mid-session, breaking the workflow's hardcoded path. Diagnosed and fixed, with an explanation of why the `data/` output path itself didn't also need to move — relative paths resolve against the process's working directory, not the script file's own location.
+- First attempt at the red/green demonstration produced a red run for the *wrong* reason: the path bug and the deliberately-broken contract landed across an overlapping sequence of commits, so the run that failed, failed at the generation step (missing file), never reaching the contract test at all. Recognized this didn't actually satisfy the point of the exercise — a red run only proves something if it's red for the reason being tested — and redid the cycle cleanly once the path issue was genuinely resolved.
+- Confirmed the redone cycle correctly: broken run failed specifically on the contract test step; reverted run passed all three steps cleanly.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **CI validates a freshly generated deterministic sample, not the live Databricks table** — GitHub Actions runners have no Spark/Databricks access; a legitimate fixture-data pattern, not a compromise.
+- **CI's GX script is deliberately simpler than Session 9's Databricks version** — the complexity in Session 9 was specifically about Databricks Serverless and persistent notebook state, neither of which exists on a runner that starts fresh every run.
+- **A red CI run only counts as a valid demonstration if it's red for the reason being tested** — an incidental failure that happens to coincide with an intentional one doesn't prove the check works.
+- **Git/CI history left as-is, not cleaned up after resolving the path bug** — an honest record of real engineering work reads as legitimate, not messy; rewriting published history is reserved for actual leaked secrets, not tidiness.
+
+**⚠️ Technical Challenges & Troubleshooting**
+1. My own exit-code verification was wrong once: piping `datacontract test`'s output through `tail` meant `$?` captured `tail`'s exit code, not `datacontract`'s — made a real failure look like exit code 0. Caught by re-running without the pipe.
+2. Workflow broke on a hardcoded script path after generators got moved into a `scripts/` folder mid-session — diagnosed and fixed in one line, with the underlying reasoning (working-directory-relative paths) explained so the same class of issue is self-diagnosable next time.
+3. The first red/green demonstration attempt was invalid — red for an incidental reason, not the intended one — because two separate issues got resolved in an order that let them overlap. Caught before accepting it as sufficient; redone cleanly.
