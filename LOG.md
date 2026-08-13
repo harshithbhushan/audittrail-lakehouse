@@ -204,3 +204,29 @@ Go, fully verified from a clean, reproducible state. `workspace.gold.account_his
 1. `NameError: name 'col' is not defined` on the first real run of the late-arrival fix — Session 6's imports and `raw_schema` weren't in scope for this cell (either a fresh notebook that never ran Session 6's cells, or Free Edition's serverless compute detaching from inactivity and resetting previously-defined variables). Fixed by making the cell fully self-contained.
 2. My own test prediction was arithmetically wrong during the unification verification (predicted 660, correct value 630) — caught and corrected before handoff, not after.
 3. The live table's real state (650) diverged from the clean-rebuild simulation (630) because the original late-arrival cell had already run for real before being replaced — resolved with a full table reset rather than trying to reason about exactly what state the table was already in.
+
+
+## Session 8 — 2026-08-12 — Chaos 3: Duplicates (Roadmap Day 8)
+
+**Goal**
+Handle duplicate `transaction_id`s at Silver via a `row_number()` window function, keeping the most recently ingested copy per ID, resolved before validation runs — not after.
+
+**Outcome**
+Go. Dedup correctly removed exactly 50 duplicate rows (12,050 → 12,000), keeping the corrected/later-ingested version in each case, verified directly on a concrete example before handoff. Silver's cumulative split (11,850 valid / 150 dead letter across all three batches ingested so far) and this batch's isolated summary (1,000/1,000 valid, 0 dead letter) both matched exactly on the real run.
+
+**Actions**
+- Designed duplicates with a genuinely different `amount` on the resent copy, not an identical row — makes "keep the latest by `ingestion_timestamp`" resolve a real business decision (a correction), not arbitrary tie-breaking between two identical copies.
+- Caught and fixed a real design flaw in the generator before testing further: initially used placeholder `customer_name`/`ssn_last4` values, which would have broken the masked-identity consistency established since Session 1 (the same `account_id` must always mask to the same hash, everywhere). Fixed by reusing the exact identity-map construction every other generator in this project uses.
+- Verified locally before handoff: dedup correctly resolves a concrete duplicate pair (kept the later-ingested, corrected amount), and unique `transaction_id` count post-dedup exactly equals row count — nothing over-collapsed.
+- Placed the dedup step before validation in the Silver cell — a row's validity is only a meaningful question once there's exactly one row per `transaction_id` to evaluate.
+- Made a real prediction error handing this off: forgot Session 5's poisoned batch (1,000 rows) when reconstructing Bronze's cumulative state locally, predicting 11,050 instead of the correct 12,050. Caught when the actual Bronze count came back higher — owned the error immediately rather than assuming the run was wrong, recomputed correctly, and the corrected prediction matched every subsequent real number exactly.
+- Ran it for real: dedup before/after matched exactly, cumulative Silver split matched exactly, batch-specific summary matched exactly — duplicates were this batch's only issue, nothing else violated a validation rule.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **Duplicates carry a genuinely different value on the resent copy**, not an identical row — makes the ordering choice a real decision with business meaning, not arbitrary tie-breaking.
+- **Dedup runs before validation, not after or in parallel** — a row's validity is only meaningful once there's exactly one row per `transaction_id`.
+- **`row_number()` over `Window.partitionBy("transaction_id").orderBy(col("ingestion_timestamp").desc())`, keep `rn == 1`** — standard, defensible "most recent wins" pattern.
+- **Reasoning about cumulative multi-batch pipeline state requires enumerating every batch actually ingested so far, not recalling from memory** — a real error caught in this session, worth remembering as the pipeline keeps accumulating more batches over the remaining days.
+
+**⚠️ Technical Challenges & Troubleshooting**
+Real one, on my end this time: predicted Bronze's cumulative count incorrectly (11,050 instead of 12,050) by reconstructing state from only two of the three batches already actually ingested. Caught immediately when the real result didn't match the prediction, recomputed correctly, and the corrected number matched the subsequent real Silver run exactly — a reminder that "trust the system's actual output over a memorized or reconstructed prediction" applies to me as much as to the pipeline itself.
