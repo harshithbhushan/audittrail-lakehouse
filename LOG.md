@@ -230,3 +230,33 @@ Go. Dedup correctly removed exactly 50 duplicate rows (12,050 → 12,000), keepi
 
 **⚠️ Technical Challenges & Troubleshooting**
 Real one, on my end this time: predicted Bronze's cumulative count incorrectly (11,050 instead of 12,050) by reconstructing state from only two of the three batches already actually ingested. Caught immediately when the real result didn't match the prediction, recomputed correctly, and the corrected number matched the subsequent real Silver run exactly — a reminder that "trust the system's actual output over a memorized or reconstructed prediction" applies to me as much as to the pipeline itself.
+
+
+## Session 9 — 2026-08-13 — Great Expectations Suite for `silver.transactions` (Roadmap Day 9)
+
+**Goal**
+Build a Great Expectations suite for `silver.transactions` (not-null on `transaction_id`/`account_id`/`amount`, amount range, currency regex, `transaction_id` uniqueness), confirm it passes on clean data, fails correctly on broken data, and can be configured to raise on failure.
+
+**Outcome**
+Go. Suite verified against the real Databricks table: clean run returns `success: True`; a deliberately broken in-memory copy (negative amount, lowercase currency — never written back to the real table) correctly returns `success: False` with exactly the two expected expectation types failing, and the configured raise fires with a clear message.
+
+**Actions**
+- Verified current GX 1.x Fluent API directly by installing and testing locally before writing any Databricks code (the roadmap itself flags this as a gotcha area) — confirmed exact expectation class names and the full suite → validation definition → checkpoint → Data Docs flow against real project data before handing anything over.
+- Explained the three-way distinction between this, Day 2's contract, and Day 4's Silver validation before building anything: contract = boundary pass/fail on the raw file; Silver = in-pipeline routing that preserves both valid and invalid records; GX = documentation/observability, an accumulating, browsable history of what was checked, for an audience that never reads the pipeline code.
+- Hit and resolved a real syntax/environment issue: `%pip install`, not plain `pip install`, is required in a notebook cell — and the cell has to actually be in Python mode. Databricks cells inherit the language of the cell immediately above them when newly inserted, which silently defaulted several new cells to SQL (inherited from Cell 1) until `%python` was added explicitly.
+- Hit and diagnosed a genuine platform incompatibility: GX persists (caches) the Spark DataFrame by default as a performance optimization across its several expectation evaluations, but Databricks Serverless disallows all persist/cache operations entirely, by design. Found the confirmed fix directly from a Great Expectations engineer on GX's own support forum, responding to an identical reported error: pass `persist=False` when creating the Spark datasource.
+- Hit and fixed a second real issue: GX's `FileDataContext` persists its configuration to disk, so rerunning a cell that uses plain `.add(...)` for a datasource, suite, validation definition, or checkpoint fails on the second run with "already exists" — inevitable given how many times this cell got rerun while debugging the two issues above. Rewrote the whole cell to use `add_or_update` throughout (confirmed to exist on every relevant GX collection by inspecting the installed library directly), plus a small get-or-add helper for the two objects that don't have their own `add_or_update`. Verified idempotent across three consecutive runs locally before handing it back.
+- Ran the corrected cell for real: clean data → `success: True`. Deliberately corrupted copy (negative amount, lowercase currency) → `success: False`, exactly the two expected expectation types failed, configured raise fired correctly.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **Great Expectations is documentation/observability, not a third redundant validation gate** — distinct purpose from Day 2's contract (boundary check) and Day 4's Silver logic (in-pipeline routing).
+- **`persist=False` on the Spark datasource** — required specifically because Databricks Serverless disallows all DataFrame caching/persist operations by design; GX's default caching optimization collides with that restriction.
+- **`add_or_update` used throughout instead of `add`**, for every GX resource — a persistent `FileDataContext` remembers everything across notebook reruns, unlike an Ephemeral context; idempotent creation is the only way to make a GX setup cell safely rerunnable.
+- **"Configure a failed check to raise" is implemented in the calling code, not inside GX itself** — `Checkpoint.run()` only reports a `.success` boolean; deciding whether that should actually halt something (a notebook, later a CI job) is the caller's responsibility, which is exactly what Day 10's CI integration will need.
+- **GX file context stored in a Unity Catalog Volume** (`workspace.landing.gx_store`), not legacy DBFS — consistent with the Free Edition pattern established since Day 3.
+
+**⚠️ Technical Challenges & Troubleshooting**
+1. `%pip install` (not `pip install`) required in a notebook cell, and new cells inherit the language of the cell immediately above them in Databricks — several cells silently defaulted to SQL until `%python` was added explicitly.
+2. `PERSIST TABLE is not supported on serverless compute` — a genuine, documented GX+Databricks-Serverless incompatibility. Fixed with `persist=False`, confirmed via GX's own official support forum rather than guessed at.
+3. `DataContextError: ... already exists` — a persistent `FileDataContext` doesn't allow plain `.add()` twice. Fixed by rewriting to `add_or_update` throughout, verified idempotent across repeated runs before handoff.
+4. `OSError: [Errno 5] Input/output error` when zipping Data Docs directly onto the Volume — a documented Databricks limitation, not something specific to this setup: Unity Catalog Volumes don't support direct-append or non-sequential (random) writes, and zip creation needs to seek backward to update its central directory after each entry. Fixed per Databricks' own official guidance: write the archive to local disk (`/tmp`) first, then copy the finished file onto the Volume as a single sequential write.
