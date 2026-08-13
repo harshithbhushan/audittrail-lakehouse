@@ -1,0 +1,27 @@
+name: Data Quality
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  data-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate sample data
+        run: python generate_transactions.py
+
+      - name: Run data contract test
+        run: datacontract test datacontract.yaml --server local_csv
+
+      - name: Run Great Expectations suite
+        run: python validate_data_quality.py

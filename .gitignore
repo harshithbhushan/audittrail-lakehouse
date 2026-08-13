@@ -1,5 +1,6 @@
 # generated data - synthetic PII-shaped fields (build artifacts)
 data/
+raw_files/
 
 # python
 venv/
