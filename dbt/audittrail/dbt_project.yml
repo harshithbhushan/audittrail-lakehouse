@@ -1,0 +1,16 @@
+name: audittrail
+version: "1.0.0"
+config-version: 2
+
+profile: audittrail
+
+model-paths: ["models"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  audittrail:
+    staging:
+      +materialized: view

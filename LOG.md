@@ -288,3 +288,34 @@ Go. Workflow live, badge green. A deliberately broken currency pattern correctly
 1. My own exit-code verification was wrong once: piping `datacontract test`'s output through `tail` meant `$?` captured `tail`'s exit code, not `datacontract`'s — made a real failure look like exit code 0. Caught by re-running without the pipe.
 2. Workflow broke on a hardcoded script path after generators got moved into a `scripts/` folder mid-session — diagnosed and fixed in one line, with the underlying reasoning (working-directory-relative paths) explained so the same class of issue is self-diagnosable next time.
 3. The first red/green demonstration attempt was invalid — red for an incidental reason, not the intended one — because two separate issues got resolved in an order that let them overlap. Caught before accepting it as sufficient; redone cleanly.
+
+
+## Session 11 — 2026-08-14 — dbt Setup + Staging (Roadmap Day 11)
+
+**Goal**
+Confirm dbt-databricks connectivity works on Free Edition (the roadmap's explicit "auth spike" — stop and adapt if it fails), then build thin staging models (`stg_transactions`, `stg_accounts`) on top of the already-governed Silver/Gold tables, with no re-validation or business logic.
+
+**Outcome**
+Go, and the auth spike wasn't a formality — Free Edition genuinely cannot create a new SQL Warehouse (confirmed via research before attempting), but does provide a pre-provisioned Serverless Starter Warehouse that works fine. `dbt debug` returned a clean connection test; `dbt run` built both staging models successfully (`PASS=2, ERROR=0`).
+
+**Actions**
+- Researched Free Edition's SQL Warehouse constraints before attempting connection, given the roadmap's explicit warning about this step — confirmed via a Databricks Community thread and a dedicated Free-Edition+dbt-Core walkthrough that new warehouse creation is disabled, but a pre-provisioned Serverless Starter Warehouse is available and PAT auth is supported.
+- Built the full dbt project structure locally (`dbt_project.yml`, `sources.yml` declaring `silver.transactions` and `gold.account_history`, both staging models) and verified it with `dbt parse` against a dummy, non-connecting profile — confirmed correct Jinja/YAML/`source()` resolution before handing anything over, since a live connection test wasn't possible without real credentials.
+- Made two real design decisions in the staging models, not just a passthrough: renamed `event_timestamp`/`ingestion_timestamp` to a `transacted_at`/`ingested_at` `_at`-suffix convention, and cast `valid_from`/`valid_to` from string to real `date` (a side effect of Session 6's string-literal sentinel dates in the MERGE logic) so every downstream consumer gets a proper type without re-casting independently.
+- Emphasized, given this repo is public, that `profiles.yml` (holding the real PAT) must live entirely outside the git repo (`~/.dbt/profiles.yml`), never inside it.
+- Diagnosed a real early failure precisely: `dbt debug` hung and failed trying to resolve a hostname that was literally the unfilled placeholder text, angle brackets and all — caught via the URL-encoded `%3c`/`%3e` characters visible in the actual error message, not guessed at.
+- Diagnosed a recurring but non-blocking PowerShell issue: relative `cd` landed in unexpected nested folders twice, since the shell's working directory carried over from wherever a prior command left it. Confirmed this never actually broke dbt itself, since dbt walks upward through parent directories looking for `dbt_project.yml`, the same way git looks for `.git`.
+- Confirmed for real: `dbt debug` → `Connection test: [OK connection ok]`, `All checks passed!`. `dbt run` → both `stg_transactions` and `stg_accounts` built as views, `PASS=2, ERROR=0`.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **Free Edition's SQL Warehouse is a pre-provisioned Serverless Starter Warehouse, not something you create** — a real, documented Free Edition constraint, not a workaround.
+- **`profiles.yml` lives outside the repo entirely, never committed** — credential hygiene that matters specifically because this is a public repo.
+- **Staging models read from Silver/Gold, not Bronze — "no re-ingestion"**: this data already passed the Day 2 contract and Day 9 GE gates; re-validating it in staging would be redundant, not extra-safe. Matches the realistic enterprise pattern of a downstream analytics team building on governed data they didn't produce.
+- **Renames follow a consistent `_at` suffix convention for timestamps** — a real analytics-engineering naming pattern, not just relabeling.
+- **`valid_from`/`valid_to` cast from string to date once, in staging** — every model built on top gets a correct type automatically instead of independently re-casting.
+- **dbt walks upward looking for `dbt_project.yml`, same as git looks for `.git`** — explains why a wrong working directory doesn't actually break dbt commands, even when it looks alarming in the output.
+
+**⚠️ Technical Challenges & Troubleshooting**
+1. `dbt debug` initially hung, then failed — root cause was `profiles.yml` still containing literal template placeholders, not filled in with real values. Diagnosed precisely via the URL-encoded angle brackets visible in the DNS resolution error.
+2. Relative `cd` commands landed in unexpected nested directories twice, since PowerShell's working directory persisted from wherever a prior command left it. Non-blocking (dbt found the right `dbt_project.yml` regardless), but worth using absolute paths going forward.
+3. Python 3.14 + Pydantic v1 compatibility warning noted, non-blocking so far — flagged to watch if something unrelated breaks later.

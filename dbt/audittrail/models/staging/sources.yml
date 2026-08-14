@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: silver
+    database: workspace
+    schema: silver
+    description: Validated, deduplicated transaction data -- already passed the Day 2 contract and Day 9 GE gates.
+    tables:
+      - name: transactions
+        description: One row per valid transaction, PII masked at Bronze, deduped and validated at Silver.
+
+  - name: gold
+    database: workspace
+    schema: gold
+    description: SCD Type 2 account history, versioned via Delta MERGE.
+    tables:
+      - name: account_history
+        description: Full version history of account_status and credit_limit, one row per validity window.
