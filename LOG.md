@@ -319,3 +319,39 @@ Go, and the auth spike wasn't a formality — Free Edition genuinely cannot crea
 1. `dbt debug` initially hung, then failed — root cause was `profiles.yml` still containing literal template placeholders, not filled in with real values. Diagnosed precisely via the URL-encoded angle brackets visible in the DNS resolution error.
 2. Relative `cd` commands landed in unexpected nested directories twice, since PowerShell's working directory persisted from wherever a prior command left it. Non-blocking (dbt found the right `dbt_project.yml` regardless), but worth using absolute paths going forward.
 3. Python 3.14 + Pydantic v1 compatibility warning noted, non-blocking so far — flagged to watch if something unrelated breaks later.
+
+
+## Session 12 — 2026-08-14 — Marts + SCD2 Second Way (dbt snapshot) + Tests (Roadmap Day 12)
+
+**Goal**
+Build the `fct_transactions_daily` mart and its tests, then implement a second, structurally different way to do SCD2 (dbt snapshot) specifically to make an explicit, defensible comparison against the custom Delta `MERGE` from Days 6–8 — required to articulate the tradeoff myself before any snapshot code was shown, per the original project instructions for this specific day.
+
+**Outcome**
+Go. Mart + tests: 4 models built (3 staging views + 1 marts table), 13/13 `dbt test` passing (12 generic + 1 custom). Snapshot: built using dbt's current YAML-based syntax, 500 rows confirmed on first run. Comparison paragraph written for the README, grounded in the actual verified mechanics of both approaches, not a generic explanation.
+
+**Actions**
+- Reasoned through, unprompted, what a dbt snapshot would have done with Session 7's late-arriving credit review record — initial answer was "I don't know," which is fine and expected; this wasn't a first-principles-derivable mechanism the way append-vs-overwrite was. Walked through the actual mechanism concretely: a snapshot only knows "did this differ from what I last recorded," stamping `dbt_valid_from` with the run's own timestamp, with zero awareness of a business-effective date — meaning the exact corruption diagnosed in Session 7 wouldn't get fixed by a snapshot, it would simply never get flagged as wrong, silently recording the correction as if it happened at run time.
+- Built `fct_transactions_daily`: daily grain, transaction count/total/average, plus a high-value count and percentage at the $10,000 SAR threshold established back on Day 1.
+- Built `stg_accounts_current` — current-state-only, one row per account — needed for two reasons: a clean `relationships`-test target (`stg_accounts` carries full SCD2 history, the wrong shape for a foreign-key check), and later reused as the snapshot's actual input.
+- Added 13 dbt tests: `not_null`/`unique`/`accepted_values`/`relationships` across the staging models and the mart, plus one custom singular SQL test (no negative amounts reaching the mart, checked at `stg_transactions` specifically so a failure points at an exact `transaction_id`, not just a suspicious aggregate).
+- Hit and fixed a real generic-test syntax deprecation: dbt 1.12 requires test arguments nested under an `arguments:` property, not as top-level keys — caught via a deprecation warning during `dbt parse`, fixed before handoff.
+- Caught, before running anything for real, that marts had only been configured for materialization (table vs view), not schema — `fct_transactions_daily` would have silently landed in the same schema as the staging views, blurring a distinction that's supposed to be meaningful. Fixed with a `+schema: marts` config plus a `generate_schema_name` macro override (dbt's default behavior concatenates a custom schema with the base one rather than using it cleanly — a widely-documented, intentional override, not project-specific magic).
+- Explained the actual mechanical reason dbt's folder structure matters, prompted by a direct question — not just organizational convention, but that dbt looks for specific folder names (`models/`, `tests/`, `snapshots/`, `macros/`) and specific macro names and behaves differently based on them; a model sitting in `tests/` wouldn't just look messy, it would get executed as a pass/fail check instead of built as a table.
+- Verified current dbt snapshot syntax before writing anything, given the pattern of API drift already hit repeatedly this project — confirmed dbt 1.9+ replaced the legacy `{% snapshot %}` Jinja block with YAML-based config as current. Built `accounts_snapshot.yml` snapshotting `stg_accounts_current` (never `gold.account_history` directly, which is already versioned) with `strategy=check`, `check_cols=[account_status, credit_limit]`, and a `dbt_valid_to_current` sentinel deliberately matching the custom `MERGE`'s own `'9999-12-31'` convention.
+- Ran `dbt run`, `dbt test`, and `dbt snapshot` for real: 4/4 models, 13/13 tests, 1/1 snapshot, all passing. Confirmed 500 rows in the snapshot table on its first run.
+- Wrote the "when I'd use each" comparison paragraph for the README, grounded in the actual mechanics just verified.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **dbt snapshot's `check` strategy has no concept of a business-effective date** — it only knows "did this differ from what I last recorded," stamping changes with the run's own timestamp. Not a missing feature to work around; the actual tradeoff, correct exactly when "when we noticed it" is an acceptable definition of "when it happened," wrong precisely in the late-arrival case Session 7 exists to solve.
+- **Snapshot target is `stg_accounts_current`, never `gold.account_history` directly** — snapshotting an already-versioned table means asking dbt to track changes in something whose entire point is to already contain every change.
+- **Snapshot lives in its own `snapshots` schema, separate from `marts`** — a technical demonstration of the pattern, not a curated, business-facing deliverable.
+- **`generate_schema_name` macro override** — dbt's default schema-naming behavior concatenates custom schemas with the base rather than using them directly; overriding this dbt-recognized macro name is standard, documented practice.
+- **dbt's folder structure is functional, not just organizational** — each folder is looked for by name and drives genuinely different behavior.
+- **`dbt_valid_to_current` sentinel deliberately matched to the custom `MERGE`'s own `'9999-12-31'` convention** — consistency across both SCD2 implementations in the same repo, not a coincidence.
+
+**⚠️ Technical Challenges & Troubleshooting**
+1. Generic test arguments deprecation (`accepted_values`, `relationships`) — caught via a parse-time warning, fixed before handoff.
+2. `marts` materialized correctly but landed in the wrong schema on the first real run — caught by reading the actual `dbt run` output carefully, not assumed correct just because the run succeeded.
+3. A malformed `sed` edit to `dbt_project.yml` produced broken YAML indentation — caught immediately via `dbt parse` before it was ever handed over.
+4. Recurring PowerShell relative-path confusion (`git add` from inside a nested subfolder; `dbt run` from the repo root instead of the dbt project folder) — same underlying pattern as Session 11, worth logging since it happened twice more; reinforced the general fix (absolute paths) rather than re-explaining from scratch each time.
+5. dbt's legacy `{% snapshot %}` Jinja-block syntax was deprecated in favor of YAML-based config as of dbt 1.9+ — verified current syntax via search before writing anything.

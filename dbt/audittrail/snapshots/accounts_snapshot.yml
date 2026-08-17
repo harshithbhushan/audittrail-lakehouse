@@ -1,0 +1,14 @@
+snapshots:
+  - name: accounts_snapshot
+    relation: ref('stg_accounts_current')
+    config:
+      schema: snapshots
+      unique_key: account_id
+      strategy: check
+      check_cols:
+        - account_status
+        - credit_limit
+      # sentinel end-date instead of NULL for current rows -- same
+      # reasoning as the custom MERGE's own valid_to convention: keeps
+      # "what was true on date X" a uniform query either way
+      dbt_valid_to_current: "to_date('9999-12-31')"

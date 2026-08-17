@@ -1,0 +1,9 @@
+version: 2
+
+models:
+  - name: fct_transactions_daily
+    columns:
+      - name: transaction_date
+        tests:
+          - unique
+          - not_null

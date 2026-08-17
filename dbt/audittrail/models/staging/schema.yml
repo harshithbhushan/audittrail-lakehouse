@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: stg_transactions
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts_current')
+                field: account_id
+      - name: amount
+        tests:
+          - not_null
+      - name: currency
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["USD", "EUR", "GBP", "CAD", "AUD"]
+
+  - name: stg_accounts
+    columns:
+      - name: account_id
+        tests:
+          - not_null
+      - name: account_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["active", "suspended", "frozen", "closed"]
+
+  - name: stg_accounts_current
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null
