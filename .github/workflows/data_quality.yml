@@ -25,3 +25,14 @@ jobs:
 
       - name: Run Great Expectations suite
         run: python validate_data_quality.py
+
+      - name: Run dbt build against the real warehouse
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: >
+          dbt build
+          --project-dir dbt/audittrail
+          --profiles-dir dbt/audittrail/ci
+          --target ci

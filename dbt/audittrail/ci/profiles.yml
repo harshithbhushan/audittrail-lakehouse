@@ -1,0 +1,16 @@
+# CI-only profile. Contains no real credentials -- every value here is a
+# reference to an environment variable name, resolved at CI runtime from
+# GitHub repo secrets. This is safe to commit publicly for exactly that
+# reason. The REAL profiles.yml with actual values lives outside the repo
+# entirely, at ~/.dbt/profiles.yml on the local dev machine -- never here.
+audittrail:
+  target: ci
+  outputs:
+    ci:
+      type: databricks
+      catalog: workspace
+      schema: staging
+      host: "{{ env_var('DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
+      threads: 4
