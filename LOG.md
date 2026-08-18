@@ -355,3 +355,36 @@ Go. Mart + tests: 4 models built (3 staging views + 1 marts table), 13/13 `dbt t
 3. A malformed `sed` edit to `dbt_project.yml` produced broken YAML indentation — caught immediately via `dbt parse` before it was ever handed over.
 4. Recurring PowerShell relative-path confusion (`git add` from inside a nested subfolder; `dbt run` from the repo root instead of the dbt project folder) — same underlying pattern as Session 11, worth logging since it happened twice more; reinforced the general fix (absolute paths) rather than re-explaining from scratch each time.
 5. dbt's legacy `{% snapshot %}` Jinja-block syntax was deprecated in favor of YAML-based config as of dbt 1.9+ — verified current syntax via search before writing anything.
+
+
+## Session 13 — 2026-08-18 — Lineage, Exposure, CI Extension (Roadmap Day 13)
+
+**Goal**
+Complete the pipeline's outward-facing layer: lineage documentation, a real downstream consumer (Power BI dashboard, tracked as a dbt exposure), and extending CI to validate the actual live warehouse via `dbt build`, not just local sample data.
+
+**Outcome**
+Go, fully verified end to end. `dbt docs` confirmed to include the exposure node in the lineage graph. Power BI dashboard built and connected live — cross-checked against a known real number: the dashboard's `11.85K` transaction count matched Session 8's independently-verified `11,850` valid-transaction total exactly, to the digit. CI extended with three GitHub repo secrets and a dedicated CI-only `profiles.yml`; confirmed via the actual run (#13, `Status: Success`, 1m 21s) that `dbt build` succeeded against the real Databricks warehouse on the first attempt after adding the secrets.
+
+**Actions**
+- Verified current Power BI + Databricks connector steps before giving instructions rather than relying on possibly-stale knowledge — confirmed the native connector flow, and recommended Import mode over DirectQuery specifically because this is static synthetic data with no need for live-query freshness, keeping the report screenshot-able without the warehouse needing to stay awake.
+- Built the dashboard to a real, if intentionally minimal, spec: a daily `total_amount` trend line, two KPI cards (explicitly checked for `Sum` aggregation and currency formatting, not left at defaults), and a `high_value_count` bar chart chosen deliberately over a single aggregate card — a by-date breakdown surfaces *when* SAR-threshold activity clustered, the actually useful signal for that column's real purpose.
+- Cross-verified the finished dashboard against already-known project history rather than just trusting it looked plausible — the transaction count matched Session 8's number exactly, and the two sharp spikes visible in both charts correspond to Sessions 5 and 8's real batch ingestion dates. The dashboard visually encodes this project's own build history.
+- Defined the exposure, verified via `dbt list --resource-type exposure` that it registers as a real graph node, not just parsed YAML. Caught and required a fix on a literal placeholder email left in a first draft, given the file is committed to a public repo — resolved with a GitHub-provided noreply address instead of a real personal email.
+- Made a real, avoidable mistake editing the README: an incautious edit accidentally deleted the entire "SCD Type 2: Two Approaches" section instead of just inserting new content before it. Caught immediately by re-viewing the file after the edit, not assumed correct just because the edit itself succeeded, and restored before it was ever handed over.
+- Extended CI to touch real infrastructure for the first time: a dedicated `dbt/audittrail/ci/profiles.yml` containing only `env_var()` references, never actual values — safe to commit specifically because of that distinction, kept clearly separate from the rule that the real, value-holding `profiles.yml` never enters the repo at all.
+- Verified the combined `requirements.txt` (now five packages) installs cleanly with zero dependency conflicts, tested in an isolated fresh virtual environment simulating a real CI runner, before trusting GitHub Actions to do the same thing unattended.
+- Extended `data_quality.yml` with a `dbt build` step using explicit `--project-dir`/`--profiles-dir` flags rather than a working-directory change, specifically to avoid the same relative-path ambiguity that caused repeated confusion earlier this session.
+- Ran `dbt build` locally first, against the real warehouse via the existing dev profile, before trusting the CI version — 18 PASS, 1 NO-OP (the exposure itself — pure dependency-graph metadata, no SQL to run), 0 errors.
+- Confirmed the actual CI run directly rather than just trusting a report of success — an initial general repo-page fetch returned what looked like a stale cached snapshot (showing only the very first commit); recognized as almost certainly a caching artifact rather than reported as real, alarming news, and resolved by fetching the specific run URL instead, which returned accurate, current data.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **Import mode chosen over DirectQuery** — static synthetic data doesn't need live-query freshness; Import keeps the report usable without the warehouse needing to stay awake for every interaction.
+- **A dbt exposure's `NO-OP` status during `dbt build` is correct, expected behavior, not a warning** — an exposure is pure dependency-graph metadata, never something materialized.
+- **CI's `profiles.yml` is safe to commit specifically because it contains only `env_var()` references, never literal values** — categorically different from the local dev `profiles.yml`, which must never enter the repo.
+- **GitHub Secrets are a fundamentally different security mechanism than a committed file** — encrypted at rest, never visible in the UI after creation, automatically redacted from logs if they appear there.
+- **CI now validates two genuinely different things at two genuinely different levels**: local fixture data (fast, isolated, no live dependency) and the actual live warehouse (`dbt build`, real infrastructure, real credentials) — a meaningful escalation in scope from Day 10, not just "more steps."
+
+**⚠️ Technical Challenges & Troubleshooting**
+1. An incautious README edit deleted an entire existing section instead of just inserting before it — caught by re-viewing the file immediately after, not assumed correct because the tool call succeeded.
+2. A literal placeholder email was initially left in a file meant for a public repo — caught and required an actual fix, not treated as cosmetic.
+3. A general repository-page fetch used to verify the CI run returned a stale cached snapshot — recognized as a caching artifact rather than reported as real news; resolved by fetching the specific run URL directly, which returned accurate data.
