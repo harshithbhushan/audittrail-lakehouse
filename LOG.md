@@ -388,3 +388,29 @@ Go, fully verified end to end. `dbt docs` confirmed to include the exposure node
 1. An incautious README edit deleted an entire existing section instead of just inserting before it — caught by re-viewing the file immediately after, not assumed correct because the tool call succeeded.
 2. A literal placeholder email was initially left in a file meant for a public repo — caught and required an actual fix, not treated as cosmetic.
 3. A general repository-page fetch used to verify the CI run returned a stale cached snapshot — recognized as a caching artifact rather than reported as real news; resolved by fetching the specific run URL directly, which returned accurate data.
+
+
+## Session 14 — 2026-08-18 — Time Travel + Audit Queries (Roadmap Day 14)
+
+**Goal**
+Write three documented Delta/audit queries with genuine business scenarios: a time-travel comparison on `gold.account_history`, a late-arrival signal in `silver.transactions`, and a rejection-rate comparison across two ingestion batches — each grounded in real project history rather than a synthetic example.
+
+**Outcome**
+Go. All three queries verified against the live warehouse, each producing results that either matched a hand-computed prediction exactly or were independently cross-checked against numbers already established in earlier, unrelated sessions.
+
+**Actions**
+- Checked `gold.account_history`'s actual `DESCRIBE HISTORY` before writing Query 1, rather than assume the roadmap's literal "7 days ago" framing applied — found the table's entire real version history spans about 2.5 minutes on 2026-08-12 (Session 8's `DROP TABLE` + rebuild), meaning a literal 7-days-ago timestamp would predate the table's current incarnation entirely. Adapted to compare version 0 (before any change) against current state — a real, meaningful milestone in this table's actual history, using the same `VERSION AS OF` mechanism the roadmap wanted demonstrated.
+- Documented, in the query's own comment, the real distinction between `VERSION AS OF` (what the system recorded — an audit/forensic question) and the `valid_from`/`valid_to` business columns (what was business-effective on a date — a different question) — the two can legitimately disagree if a correction was applied after the version being queried.
+- Verified Query 1 for real: returned accounts changed between version 0 and current state, including a clean example (`ACC00036`) showing a credit-limit-only change with status unchanged — confirming the query catches attribute-level changes independently, not just status flips.
+- For Query 2, found a genuine late-arrival signal in the transaction data rather than settle for an honest "we don't have one" caveat: Session 8's 50 duplicate-resend transactions were deliberately generated with a 2–4 hour ingestion lag (vs. ≤2 hours for everything else), and because dedup keeps the most-recently-ingested copy, the survivors in `silver.transactions` are exactly the large-lag versions. Predicted ~50 rows before running; got exactly 50, `lag_hours` ranging 2.04–3.96, matching the generator's own design bounds precisely.
+- For Query 3, reused the exact left-semi join technique already built into the Silver notebook's own batch-summary logging (Session 5) to isolate two specific batches' rejection rates from tables carrying no source-batch column at all. Predicted the exact numbers from Session 5's original verification before running (0.0% / 15.0%); got an exact match, confirming both a working query and a self-consistent project history across widely separated sessions.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- **`VERSION AS OF` answers a genuinely different question than the SCD2 `valid_from`/`valid_to` columns** — system/audit history vs. business-effective history. Worth articulating the distinction precisely, not just citing the syntax.
+- **Adapted Query 1's timing away from the roadmap's literal "7 days ago"** once `DESCRIBE HISTORY` showed the real version history didn't span that far back — same "check reality before writing the query" discipline applied throughout this project to platform-specific claims.
+- **Query 2 turned an apparent honesty caveat into an actual finding**, by tracing the real consequence of an earlier session's design choice rather than writing a query that would trivially return nothing.
+- **Query 3 treats "how do I isolate one batch's outcome" as a solved problem already**, reusing Session 5's own pattern rather than inventing a new mechanism — consistency of technique across the project, not just consistency of results.
+- **All three queries verified against hand-computed or previously-established predictions before being treated as correct** — a query returning results isn't the same as a query returning the *right* results.
+
+**⚠️ Technical Challenges & Troubleshooting**
+None this session — all three queries worked correctly on the first real run, each confirmed against an independent prediction rather than just visually inspected.
