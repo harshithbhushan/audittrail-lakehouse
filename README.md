@@ -25,6 +25,18 @@ On top of the ingestion-time contract (Day 2) and Silver's routing logic (Day 4)
 
 ![Great Expectations validation failure](images/session09_ge_validation_failure.png)
 
+## Data Lineage
+
+Generated via `dbt docs generate` — the full dependency graph from raw governed tables through to the business-facing dashboard: `silver.transactions`/`gold.account_history` → staging models → `fct_transactions_daily`/`accounts_snapshot` → the Power BI exposure. Every arrow in this graph is a real `ref()`/`source()` call in the project, not a diagram drawn by hand.
+
+![dbt lineage graph: source through staging, marts, and the exposure](images/session13_lineage.png)
+
+## Business-Facing Dashboard
+
+A Power BI dashboard connects live to the Databricks SQL warehouse (native connector, Import mode) against `fct_transactions_daily`, tracked in this repo as a dbt `exposure` so it shows up in the lineage graph above as a real downstream consumer, not just a screenshot with no connection to the pipeline that feeds it.
+
+![Power BI dashboard: daily transaction overview](images/session13_dashboard.png)
+
 ## SCD Type 2: Two Approaches
 
 Account history is implemented two different ways in this project, deliberately, to make a real tradeoff visible rather than silently pick one. `gold.account_history` (Days 6–8) uses a custom Delta `MERGE`: it locates exactly which historical window a change belongs to by its *business-effective date*, splitting that window if needed — a correction discovered today but effective weeks ago still lands in the correct place in history. `snapshots.accounts_snapshot` (Day 12), tracking the same two attributes (`account_status`, `credit_limit`) via dbt's `check` strategy, works fundamentally differently: on every run it diffs current state against what it last recorded and stamps any change with `dbt_valid_from` set to *that run's own timestamp* — it has no concept of when a change was actually effective, only when the snapshot happened to notice it. I'd reach for a dbt snapshot when the transformation layer is allowed to own the definition of history — it's simpler to build and maintain, and correct as long as "when we noticed it" is an acceptable stand-in for "when it happened." I'd reach for the custom `MERGE` approach specifically when late-arrival correctness matters to the business — account history for a financial audit trail being exactly that case, where "what was true on this date" needs a real answer, not an artifact of when a batch job happened to run.
