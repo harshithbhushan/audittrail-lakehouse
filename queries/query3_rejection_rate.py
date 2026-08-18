@@ -17,6 +17,14 @@
 # `transaction_id` keys—reusing the batch-summary logging design pattern built in Session 5.
 # ==============================================================================
 
+from pyspark.sql import SparkSession
+
+# Initialize spark reference for local IDE autocomplete & linter resolution
+try:
+    spark  # type: ignore # Checks if spark is already injected by Databricks
+except NameError:
+    spark = SparkSession.builder.getOrCreate()
+    
 batch1_ids = spark.read.option("header", True).csv(
     "/Volumes/workspace/landing/raw_files/transactions.csv"
 ).select("transaction_id")
