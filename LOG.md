@@ -414,3 +414,27 @@ Go. All three queries verified against the live warehouse, each producing result
 
 **⚠️ Technical Challenges & Troubleshooting**
 None this session — all three queries worked correctly on the first real run, each confirmed against an independent prediction rather than just visually inspected.
+
+
+## Sessions 15–16 — 2026-08-18 — Presentation (Roadmap Days 15–16)
+
+**Goal**
+Bring the README up to the roadmap's final bar — architecture diagram, problem statement, stack justifications, how-to-run — and draft resume material, grounded only in what was actually built and measured across the whole project.
+
+**Outcome**
+README fully restructured and pushed: problem statement, a two-layer Mermaid architecture diagram (medallion + dbt, with governance touchpoints), a justified stack table, and a complete how-to-run sequence, all added around the chaos-scenario/SCD2/screenshot content already built in earlier sessions. Resume bullet variants (DE, AE, Cloud DE) drafted and reviewed for accuracy against verified project numbers — content itself lives outside this repo, not duplicated here. Still open: the Loom walkthrough, script drafted but not yet recorded or linked.
+
+**Actions**
+- Assessed what the roadmap's Day 15–16 checklist actually still needed versus what earlier sessions had already delivered (chaos scenarios, SCD2 comparison, and most screenshots were already done) — built only the genuine gaps rather than redundantly rebuilding finished sections.
+- Attempted to render the Mermaid diagram directly in the sandbox before handoff (installed `mermaid-cli`, then fell back to the lower-level `@mermaid-js/parser` package after no headless browser was available) — neither path produced a full validated render. Rather than hand over unverified syntax silently, flagged the limitation honestly and pointed to `mermaid.live` as a faster, more reliable independent check than continuing to fight sandbox tooling. Confirmed correct by the user against the rendered output before pushing.
+- Wrote the how-to-run section to point at the project's own real files (specific notebook paths, exact commands already used throughout the build) rather than duplicate their content inline — a stranger following it uses the actual repo, not a rewritten summary of it.
+- Drafted three resume bullet variants (DE, AE, Cloud DE), each emphasizing a genuinely different slice of the same real work rather than relabeling identical bullets — verified every quantified claim (150/150 malformed records, zero gaps/overlaps, 13 passing tests) against numbers already established in specific earlier sessions before including them.
+- Caught and corrected an accuracy issue in an early bullet draft: the CI/CD line originally implied `dbt build` itself had been deliberately broken and observed failing in CI, which never happened — only the data contract was red/green tested that way (Session 10). Narrowed the claim to what was actually verified.
+- Kept the Cloud DE variant honest about scope, same discipline as this project's other resume material — no AWS/Azure/GCP service claims, since none were used; leaned instead on what's genuinely true (serverless-only architecture, encrypted CI credential management) rather than a generic "cloud" framing that would overclaim.
+
+**🏗️ Architectural Decisions & Key Concepts**
+- The README's final structure separates orientation (problem statement, architecture, stack) from deep-dive content (chaos scenarios, SCD2 comparison, lineage) from execution (how-to-run) — a stranger can stop reading after the first section with a correct high-level understanding, or continue for full technical depth.
+- Resume bullets for the same project can legitimately differ by more than word substitution — which piece of real work leads, and how the same shared result (the SCD2 comparison) gets framed, changes meaningfully between an engineering-flavored and an analytics-flavored reader without any claim becoming less true.
+
+**⚠️ Technical Challenges & Troubleshooting**
+Could not get a fully validated Mermaid render in this environment — no headless browser for `mermaid-cli`, and the lower-level parser package's API (Langium-based) wasn't practical to script quickly. Resolved by directing verification to `mermaid.live` instead of continuing to fight sandbox limitations for a check the user could run themselves in seconds — confirmed correct against the actual rendered output before pushing.

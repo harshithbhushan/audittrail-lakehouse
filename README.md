@@ -2,7 +2,59 @@
 
 [![Data Quality](https://github.com/harshithbhushan/audittrail-lakehouse/actions/workflows/data_quality.yml/badge.svg)](https://github.com/harshithbhushan/audittrail-lakehouse/actions/workflows/data_quality.yml)
 
-AuditTrail is a production-style financial data lakehouse built on Databricks Free Edition, demonstrating schema contract enforcement, PII masking at ingestion, and SCD Type 2 account history for point-in-time auditability. All data is fully synthetic, generated with Faker to model realistic transaction volume and structure without using any real financial or personal information. This is an active 16-day build — see `LOG.md` for daily progress and design decisions as they're made.
+AuditTrail is a production-style financial data lakehouse built on Databricks Free Edition, demonstrating schema contract enforcement, PII masking at ingestion, and SCD Type 2 account history for point-in-time auditability. All data is fully synthetic, generated with Faker to model realistic transaction volume and structure without using any real financial or personal information. See `LOG.md` for the full session-by-session build narrative and every design decision behind it.
+
+## Problem Statement
+
+Financial data pipelines have to answer questions an ordinary ETL job doesn't: what did this account look like on a specific date, not just what does it look like now? Did a batch of incoming transactions actually pass validation, or did something silently corrupt downstream reporting? Can a change discovered today, but effective weeks ago, be reflected correctly in history without breaking queries that already ran against it? AuditTrail is a from-scratch build answering exactly those questions — schema contracts and dead-letter routing so bad data never silently enters the warehouse, PII masked at ingestion so raw identity data never persists past Bronze, and two different, deliberately contrasted implementations of point-in-time account history, so the real tradeoffs between them are demonstrated, not just asserted.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    subgraph medallion["Medallion Layer (Databricks + PySpark)"]
+        direction TB
+        raw["Raw Files<br/>(Volumes)"] -->|"mask PII, sha2()"| bronze["Bronze"]
+        bronze -->|"dedup, validate,<br/>route to dead letter"| silver["Silver"]
+        silver -->|"SCD2 MERGE<br/>(late-arrival aware)"| gold["Gold: account_history"]
+    end
+
+    subgraph dbtlayer["Transformation Layer (dbt)"]
+        direction TB
+        stgtxn["stg_transactions"]
+        stgacct["stg_accounts"]
+        stgacctcurr["stg_accounts_current"]
+        mart["fct_transactions_daily"]
+        snap["accounts_snapshot<br/>(dbt snapshot)"]
+        dash["Power BI Dashboard<br/>(exposure)"]
+
+        stgacct --> stgacctcurr
+        stgtxn --> mart
+        stgacctcurr --> snap
+        mart --> dash
+    end
+
+    silver --> stgtxn
+    gold --> stgacct
+
+    contract["Data Contract<br/>(Day 2)"] -.->|"validates"| raw
+    ge["Great Expectations<br/>(Day 9)"] -.->|"validates"| silver
+    ci["CI/CD<br/>(GitHub Actions)"] -.->|"tests contract, GE, dbt build"| contract
+```
+
+## Stack
+
+| Tool | Why |
+|---|---|
+| Databricks Free Edition | Unity Catalog governance, Delta Lake, and a SQL warehouse in one place, at zero cost for a portfolio-scale build. |
+| PySpark | The transformation engine behind masking, validation, dedup, and the SCD2 `MERGE` logic — the practitioner-standard tool for schema-aware transformation at this scale. |
+| Delta Lake | The storage format under every table, chosen specifically for `MERGE` support and native time travel (`VERSION AS OF`) — both load-bearing in this project, not incidental. |
+| datacontract-cli | Enforces a schema/quality contract on the raw file *before* it's trusted enough to enter the lakehouse at all. |
+| Great Expectations | Documentation-first validation — a browsable, accumulating history of what was checked, for an audience that never reads the pipeline code. |
+| dbt (core + databricks) | The transformation/testing/documentation layer on governed data — lineage graph, generic tests, and a second, deliberately contrasting way to implement SCD2. |
+| GitHub Actions | Automatically enforces the contract, GE suite, and `dbt build` on every push, so validation doesn't depend on a human remembering to run it. |
+| Power BI Desktop | The business-facing consumption layer, connected live via the native Databricks connector, tracked in the project as a dbt exposure — a real lineage node, not a disconnected screenshot. |
+| Faker | Generates fully synthetic transaction and account data — realistic volume and structure, zero real financial or personal information. |
 
 ## Continuous Integration
 
@@ -40,3 +92,41 @@ A Power BI dashboard connects live to the Databricks SQL warehouse (native conne
 ## SCD Type 2: Two Approaches
 
 Account history is implemented two different ways in this project, deliberately, to make a real tradeoff visible rather than silently pick one. `gold.account_history` (Days 6–8) uses a custom Delta `MERGE`: it locates exactly which historical window a change belongs to by its *business-effective date*, splitting that window if needed — a correction discovered today but effective weeks ago still lands in the correct place in history. `snapshots.accounts_snapshot` (Day 12), tracking the same two attributes (`account_status`, `credit_limit`) via dbt's `check` strategy, works fundamentally differently: on every run it diffs current state against what it last recorded and stamps any change with `dbt_valid_from` set to *that run's own timestamp* — it has no concept of when a change was actually effective, only when the snapshot happened to notice it. I'd reach for a dbt snapshot when the transformation layer is allowed to own the definition of history — it's simpler to build and maintain, and correct as long as "when we noticed it" is an acceptable stand-in for "when it happened." I'd reach for the custom `MERGE` approach specifically when late-arrival correctness matters to the business — account history for a financial audit trail being exactly that case, where "what was true on this date" needs a real answer, not an artifact of when a batch job happened to run.
+
+## How to Run
+
+**Prerequisites:** a Databricks Free Edition account, Python 3.12+, and (optional) Power BI Desktop for the dashboard.
+
+1. **Clone and install:**
+   ```powershell
+   git clone https://github.com/harshithbhushan/audittrail-lakehouse.git
+   cd audittrail-lakehouse
+   pip install -r requirements.txt
+   ```
+
+2. **Databricks setup.** Create the landing volume and medallion schemas (exact SQL in `notebooks/session03_bronze_masking.py`, Cell 1), then generate and upload the raw data:
+   ```powershell
+   python scripts/generate_transactions.py
+   python scripts/generate_account_snapshots.py
+   ```
+   Upload the resulting CSVs to `workspace.landing.raw_files` via the Databricks UI.
+
+3. **Run the notebooks, in order**, from `notebooks/`: Bronze masking → Silver dead-letter routing (with dedup) → SCD2 account history (unified normal + late-arrival `MERGE`) → Great Expectations suite. Each notebook's cells are self-contained and commented with the reasoning behind each choice, not just what the code does.
+
+4. **Data contract:** `datacontract test datacontract.yaml --server local_csv` — validates the raw file's structure independently of the pipeline itself.
+
+5. **dbt.** Create `~/.dbt/profiles.yml` with your own real credentials (field names shown in `dbt/audittrail/ci/profiles.yml` — that file itself only holds environment-variable references, never real values; never commit a version of this file with actual credentials in it), then:
+   ```powershell
+   cd dbt/audittrail
+   dbt build
+   ```
+
+6. **(Optional) Power BI dashboard:** connect Power BI Desktop to your SQL warehouse via the native Databricks connector, Import mode, against `workspace.marts.fct_transactions_daily`.
+
+7. **CI/CD** runs automatically on every push to `main` once three GitHub repo secrets are set (`DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH`, `DATABRICKS_TOKEN`) — see `.github/workflows/data_quality.yml`.
+
+Three additional audit/time-travel queries, each grounded in this project's own real history, are in `queries/`.
+
+## Walkthrough
+
+*2-minute video walkthrough: [link pending]*
