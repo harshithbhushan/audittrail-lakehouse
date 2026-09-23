@@ -129,4 +129,4 @@ Three additional audit/time-travel queries, each grounded in this project's own 
 
 ## Walkthrough
 
-*2-minute video walkthrough: [link pending]*
+[2-minute video walkthrough](https://lnkd.in/p/gvnuNnzW)
