@@ -8,7 +8,7 @@ exposures:
     url: dashboards/audittrail.pbix
     description: >
       Power BI dashboard for daily transaction volume, average amount, and
-      high-value (SAR-threshold) counts. Connects live to the Databricks
+      high-value (CTR-threshold) counts. Connects live to the Databricks
       SQL warehouse via the native Databricks connector (Import mode),
       same host/HTTP path/PAT dbt itself uses.
     depends_on:

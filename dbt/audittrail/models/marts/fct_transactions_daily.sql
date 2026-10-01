@@ -1,5 +1,5 @@
 -- daily fact table: volumes, average amounts, and a high-value count at
--- the $10,000 SAR threshold established back on Day 1. grain is one row
+-- the $10,000 CTR threshold established back on Day 1. grain is one row
 -- per calendar date.
 select
     cast(transacted_at as date) as transaction_date,
